@@ -1,0 +1,190 @@
+---
+title:   "<img id=\"logo\" style=\"width: 100px;\" src=\"figures/logo.jpg\" />"
+author: "Selcan Aydin"
+output: 
+ html_document:
+    toc: true
+    toc_depth: 4
+    toc_float: 
+      collapsed: false
+      smooth_scroll: false
+    df_print: paged
+    code_folding: hide
+    includes:
+      after_body: include_footer.html
+---
+
+```{r setup}
+
+## set chunk options
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(progress = FALSE)
+
+## load libraries
+library(tidyverse)
+library(qtl2)
+library(here)
+library(assertthat)
+library(readxl)
+library(ggpubr)
+source(here("qtl2geno_splitMap.R") )#for qtl2 split_map fucntion
+
+        
+```
+
+
+```{r read_data}
+## read in data
+## genotype probabilities
+probs <- readRDS( here("data","Filas_DO_MURGIGV01_20190131_20200220__GigaMUGA_genoprobs_8state_69k_sorted.rds")) 
+
+## Prep for mapping
+### Prep probs for mapping, make gmap and pmap, calculate kinship_loco
+
+#### Let's get the gmap
+mapfile <- (here("data","ref.genome_grid_69k.for_qtl2.csv"))
+markers <- dimnames(probs)[[3]]
+map_dat <- qtl2::read_csv(mapfile)[markers, ]
+assert_that(are_equal(rownames(map_dat), markers))
+gmap <- split_map(map_dat)
+map_dat$marker <- rownames(map_dat)
+
+####  let's modify genoprobs
+####  This function is from Dan Skelly:
+message("converting probs to qtl2 and calculating kinship matrix")
+uchroms <- unique(map_dat$chr)
+probs_3d_to_qtl2 <- function(genoprobs) {
+  # Convert to qtl2 genoprobs format
+  # Similar to qtl2convert::probs_doqtl_to_qtl2()
+  markers <- dimnames(genoprobs)[[3]]
+  chroms <- sapply(strsplit(markers, "_"), "[[", 1)
+  newprobs <- vector("list", length(uchroms))
+  names(newprobs) <- uchroms
+  for (chrom in uchroms) newprobs[[chrom]] <- genoprobs[, , chroms == chrom]
+  attr(newprobs, "is_x_chr") <- c(rep(FALSE, length(uchroms)-1),TRUE)
+  attr(newprobs, "crosstype") <- "DO"
+  attr(newprobs, "alleles") <- c("A","B","C","D","E","F","G","H")
+  attr(newprobs, "alleleprobs") <- TRUE
+  class(newprobs) <- c("calc_genoprob", "list")
+  newprobs
+}
+
+genoprobs <- probs_3d_to_qtl2(probs)
+#### get kinship matrix for mapping
+kinship_loco <- qtl2::calc_kinship(genoprobs, "loco", cores=1)
+#### get pmap
+map_dat2 <- map_dat %>%
+  separate(marker, into=c('chrom', 'pos_bp'), convert=T, remove=F) %>%
+  mutate(n=1:n()) %>% as_tibble()
+pmap <- split_map(dplyr::select(map_dat2, marker,
+                                chr, pos_bp) %>% as.data.frame() %>%
+                    tibble::remove_rownames() %>%
+                    tibble::column_to_rownames('marker'))
+
+####  prep some stuff for plotting:
+uchr <- c(as.character(1:19), "X")
+cl <- dplyr::select(map_dat2, chr, pos_bp) %>%
+  group_by(chr) %>%
+  dplyr::summarize(len = max(pos_bp))
+clp <- with(cl, setNames(len, chr))
+chrom_lens <- setNames(as.numeric(clp[uchr]), uchr)
+chrom_lens_offset <- cumsum(chrom_lens) - chrom_lens
+chrom_lens_midpt <- chrom_lens_offset + chrom_lens / 2
+map_dat2$pos_bp_offset <- map_dat2$pos_bp+chrom_lens_offset[map_dat2$chr]
+
+
+## read in phenotype data
+ovary_counts <- read_excel(here("data","Pheno_data.xlsx"), 
+                           skip = 2, # skip first row
+                           col_names = c("animal_id",
+                                         "ovary1_pos1",
+                                         "ovary2_pos1",
+                                         "ovary1_pos2",
+                                         "ovary2_pos2",
+                                         "ovary1_pos3",
+                                         "ovary2_pos3",
+                                         "ovary1_pos4",
+                                         "ovary2_pos4",
+                                         "ovary1_pos5",
+                                         "ovary2_pos5",
+                                         "ovary1_avg",
+                                         "ovary2_avg",
+                                         "sum_pos1",
+                                         "sum_pos2",
+                                         "sum_pos3",
+                                         "sum_pos4",
+                                         "sum_pos5"
+                                         )# override column names
+                           ) %>% 
+  column_to_rownames("animal_id")
+  
+## read in covariates: generation
+covar_mat <- read_csv( here("data","GM_covar.csv"))
+### make the covar matrix using generation
+covar<- model.matrix( ~generation, data = covar_mat) 
+rownames(covar) <- covar_mat$id
+
+
+```
+
+# QTL mapping with ovary counts from DO mice
+
+This is the QTL mapping results of ovary counts obtained from DO mice by Ruby Boateng. The genotype probabilities were provided by Belinda Cornes in CS. 
+
+## Overview of the data
+
+There are two ovaries counted from 5 locations across a slide from each DO animal. We will use the individual counts ( n = 10), the average per location ( n = 5), the average of counts (n = 1), and the sum of counts ( n = 1) per animal.
+
+Below is the QTL mapping code for reference:
+
+```{r qtl_mapping, cache = TRUE}
+
+# mapping for all the phenotypes
+qtl_map <- qtl2::scan1(genoprobs, ovary_counts[, 1:17, drop=FALSE],
+                   kinship_loco, 
+                   addcovar=covar, 
+                   cores=1) 
+
+# get significance thresholding for all 
+
+
+```
+
+
+```{r qtl_mapping_plot, fig.height=15, fig.width=10}
+
+
+# remember columns 1-10 is the individual ovary counts for 1, 2 for all 5 positions. 
+qtl_map %>% 
+  as_tibble( rownames = "marker") %>% 
+  left_join(map_dat2) %>% 
+  pivot_longer( cols = 2:18, names_to = c("ovary","slide_position"), names_sep ="_", values_to = "LOD") %>% 
+  filter(
+    ovary != "sum",
+    slide_position !="avg"
+  ) %>% 
+  ggplot()+
+  aes(
+    x = pos_bp_offset,
+    y = LOD
+  )+
+  geom_line(  alpha = .5,
+    aes( col = ovary,
+    group = interaction(ovary, slide_position) )
+  )+
+  facet_wrap(~slide_position, nrow = 5)+
+  theme_pubclean()
+
+# add chrosomome numbers + squares in the background to identify the chromosomes
+# get peaks from each run and make zoomed in plots with allele effects
+# association mapping for the ones you want to follow up
+
+
+```
+
+
+
+
+
+
+
