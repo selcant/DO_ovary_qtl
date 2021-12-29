@@ -4,4 +4,7 @@
 .Ruserdata
 .Renviron
 .Rprofile
+*.html
 renv
+data
+figures
