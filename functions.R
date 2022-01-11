@@ -1,3 +1,23 @@
+
+
+chroms <- c(as.character(1:19), "X")
+interp_bp <- function(df) {
+  
+  df <- arrange(df, peak_chr, peak_cM)
+  peak_gpos <- select(df, peak_chr, peak_cM)
+  chr <- peak_gpos$peak_chr
+  f <- factor(chr, chroms)
+  peak_gcoord_list <- split(peak_gpos$peak_cM, f)
+  peak_pcoord_list <- qtl2::interp_map(peak_gcoord_list, gmap, pmap)
+  df$interp_bp_peak <- unsplit(peak_pcoord_list, f)
+  df
+}
+
+rankZ <- function (x) {
+  x <- rank(x, na.last = "keep", ties.method = "average")/(sum(!is.na(x)) + 1)
+  qnorm(x)
+}
+
 split_map <- function (map, chr_names = NULL)
 {
   map <- reorder_map_table(map, chr_names = chr_names)
