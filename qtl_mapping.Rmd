@@ -1,8 +1,10 @@
 ---
-title:   "<img id=\"logo\" style=\"width: 100px;\" src=\"figures/logo.jpg\" />"
+title:   "<img id=\"logo\" style=\"width: 100px;\" src=\"figures/logo.jpg\" /> QTL mapping with ovary counts from DO mice"
 author: "Selcan Aydin"
+date: "`r Sys.Date()`"
 output: 
  html_document:
+    code_download: true
     toc: true
     toc_depth: 4
     toc_float: 
@@ -14,7 +16,8 @@ output:
       after_body: include_footer.html
 ---
 
-```{r setup}
+
+```{r setup, warning=FALSE, message=FALSE, results='hide'}
 
 ## set chunk options
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
@@ -27,29 +30,50 @@ library(here)
 library(assertthat)
 library(readxl)
 library(ggpubr)
-source(here("qtl2geno_splitMap.R") )#for qtl2 split_map fucntion
+source(here("functions.R") )#for qtl2 split_map function and others
 
+# graphical parameters
+founder_colors <- c("#FFDC00", "#888888", "#F08080", "#0064C9", "#7FDBFF", "#2ECC40", "#FF4136", "#B10DC9")
         
 ```
 
 
 ```{r read_data}
-## read in data
-## genotype probabilities
+
+## read in covariates:
+### correcting sample names -- to match the phenotype matrix
+covar_mat <- read_csv( here("data","GM_covar_whistology.csv")) %>% 
+  mutate( generation = factor(generation)) %>% 
+  mutate( animal_id = gsub("-","_",id)) %>% # need to change the - to _ first then remove the _T
+  mutate( animal_id = gsub("_T","",animal_id)) # need to change the - to _ first then remove the _T
+  
+### make the covar matrix using generation
+covar<- model.matrix( ~generation+histology_batch, data = covar_mat) 
+covar <- covar[,-1] #removing intercept column
+rownames(covar) <- covar_mat$animal_id
+
+## read in genotype probabilities
 probs <- readRDS( here("data","Filas_DO_MURGIGV01_20190131_20200220__GigaMUGA_genoprobs_8state_69k_sorted.rds")) 
 
-## Prep for mapping
-### Prep probs for mapping, make gmap and pmap, calculate kinship_loco
-
-#### Let's get the gmap
+## read in marker details and make gmap & pmap
+#### gmap
 mapfile <- (here("data","ref.genome_grid_69k.for_qtl2.csv"))
 markers <- dimnames(probs)[[3]]
 map_dat <- qtl2::read_csv(mapfile)[markers, ]
-assert_that(are_equal(rownames(map_dat), markers))
+# assert_that(are_equal(rownames(map_dat), markers))
 gmap <- split_map(map_dat)
 map_dat$marker <- rownames(map_dat)
+#### pmap
+map_dat2 <- map_dat %>%
+  separate(marker, into=c('chrom', 'pos_bp'), convert=T, remove=F) %>%
+  mutate(n=1:n()) %>% 
+  as_tibble()
+pmap <- split_map(dplyr::select(map_dat2, marker,
+                                chr, pos_bp) %>% as.data.frame() %>%
+                    tibble::remove_rownames() %>%
+                    tibble::column_to_rownames('marker'))
 
-####  let's modify genoprobs
+##  genoprobs need to be modified to match qtl2 formatting
 ####  This function is from Dan Skelly:
 message("converting probs to qtl2 and calculating kinship matrix")
 uchroms <- unique(map_dat$chr)
@@ -68,20 +92,15 @@ probs_3d_to_qtl2 <- function(genoprobs) {
   class(newprobs) <- c("calc_genoprob", "list")
   newprobs
 }
-
 genoprobs <- probs_3d_to_qtl2(probs)
-#### get kinship matrix for mapping
-kinship_loco <- qtl2::calc_kinship(genoprobs, "loco", cores=1)
-#### get pmap
-map_dat2 <- map_dat %>%
-  separate(marker, into=c('chrom', 'pos_bp'), convert=T, remove=F) %>%
-  mutate(n=1:n()) %>% as_tibble()
-pmap <- split_map(dplyr::select(map_dat2, marker,
-                                chr, pos_bp) %>% as.data.frame() %>%
-                    tibble::remove_rownames() %>%
-                    tibble::column_to_rownames('marker'))
+## subsetting and correcting the sample names -- to match the phenotype matrix
+genoprobs <- genoprobs[ind = covar_mat$id]
+new.ids <- covar_mat$animal_id
+names(new.ids) <- covar_mat$id
+genoprobs <- replace_ids(genoprobs, ids = new.ids)
 
-####  prep some stuff for plotting:
+
+##  prep some stuff for plotting:
 uchr <- c(as.character(1:19), "X")
 cl <- dplyr::select(map_dat2, chr, pos_bp) %>%
   group_by(chr) %>%
@@ -117,72 +136,587 @@ ovary_counts <- read_excel(here("data","Pheno_data.xlsx"),
                                          )# override column names
                            ) %>% 
   column_to_rownames("animal_id")
-  
-## read in covariates: generation
-covar_mat <- read_csv( here("data","GM_covar.csv"))
-### make the covar matrix using generation
-covar<- model.matrix( ~generation, data = covar_mat) 
-rownames(covar) <- covar_mat$id
 
+### annotate the ovary counts + normalize + avg. etc. into a tibble.
+ovary_counts_pos_long <- ovary_counts %>% 
+  rownames_to_column("animal_id") %>% 
+  select(c("animal_id",
+           "ovary1_pos1","ovary2_pos1",
+           "ovary1_pos2","ovary2_pos2",
+           "ovary1_pos3","ovary2_pos3",
+           "ovary1_pos4","ovary2_pos4",
+           "ovary1_pos5","ovary2_pos5" )
+         ) %>% # remove the sum + average, will remake them
+  pivot_longer(cols = 2:11, 
+               names_to = c("ovary","position"), names_sep = "_", 
+               values_to = "count"
+  ) %>% 
+  mutate( ovary = factor(str_sub(ovary,6)),
+          position = factor(str_sub(position,4))
+          ) 
+
+### have the phenotypes in a matrix format for PCA later
+ovary_counts_pos_long %>% 
+  pivot_wider( id_cols = "animal_id", 
+               values_from = "count",
+               names_from = c("ovary","position"),
+               names_glue = "ovary{ovary}_position{position}"
+               ) %>% 
+  column_to_rownames("animal_id")-> ovary_counts_pos_wide
+#ovary_counts_pos_wide_rankZ <- apply(ovary_counts_pos_wide, 2, rankZ) # rankZ normalized individual values.
+
+## subset the data to only include the animals with phenotype
+### get samples
+sample_ids <- unique(ovary_counts_pos_long$animal_id)
+### subset genoprobs then calculate kinship
+genoprobs <- genoprobs[ ind = sample_ids]
+### get kinship matrix for mapping
+kinship_loco <- qtl2::calc_kinship(genoprobs, "loco", cores=1)
+### subset covar
+covar <- covar[sample_ids,,drop=FALSE]
+
+## controls for mapping -- check that the sample names are matching across the data sets we are using for mapping.
+# assert_that(are_equal(rownames(genoprobs[[1]]), rownames(ovary_counts_pos_wide_rankZ)))
+# assert_that(are_equal(rownames(genoprobs[[1]]), rownames(covar)))
 
 ```
 
-# QTL mapping with ovary counts from DO mice
+This is the overview, processing and QTL mapping analysis of ovary counts obtained from DO mice by Ruby Boateng. The genotype probabilities were provided by Belinda Cornes in CS. You can download the code using the link on the upper right corner or hide/view chunks of interest or check out the [github repo](https://github.com/selcant/DO_ovary_qtl). The full list of R packages can be found in the [renv.lock](https://github.com/selcant/DO_ovary_qtl/blob/main/renv.lock) file. 
 
-This is the QTL mapping results of ovary counts obtained from DO mice by Ruby Boateng. The genotype probabilities were provided by Belinda Cornes in CS. 
+## Overview of the data {.tabset .tabset-fade .tabset-pills}
 
-## Overview of the data
+```{r get_phenotype_matrix}
 
-There are two ovaries counted from 5 locations across a slide from each DO animal. We will use the individual counts ( n = 10), the average per location ( n = 5), the average of counts (n = 1), and the sum of counts ( n = 1) per animal.
+# making the phenotype matrix with all the stats to map with! 
 
-Below is the QTL mapping code for reference:
+# get pca
+pca_ova <- prcomp( (ovary_counts_pos_wide), center = T, scale. = T)
+percentVar <- round(100 * pca_ova$sdev^2 / sum(pca_ova$sdev^2),2)
+pca_ova_df <- pca_ova$x %>% 
+  as.data.frame() %>% 
+  rownames_to_column("animal_id") %>% 
+  left_join( covar_mat )
+
+# get median by pos
+median_by_pos <- ovary_counts_pos_long %>% 
+  group_by(animal_id, position) %>% 
+  summarize( count_med_pos = median(count)) %>% 
+  pivot_wider( names_from = position, names_glue="med_position_{position}", 
+               values_from = count_med_pos)
+
+# get median by animal
+median_by_animal <- ovary_counts_pos_long %>% 
+  group_by(animal_id) %>% 
+  summarize( count_med = median(count))
+
+# get sum by position
+sum_by_pos <- ovary_counts_pos_long %>% 
+  group_by(animal_id, position) %>% 
+  summarize( count_sum_pos = sum(count)) %>% 
+  pivot_wider( names_from = position, names_glue="sum_position_{position}", 
+               values_from = count_sum_pos)
+
+# get sum by animal
+sum_by_animal <- ovary_counts_pos_long %>% 
+  group_by(animal_id) %>% 
+  summarize( count_sum = sum(count))
+
+
+ovary_counts_pos_wide %>% 
+  rownames_to_column("animal_id") %>% 
+  left_join( ., pca_ova_df %>%
+    select( animal_id, PC1) 
+    ) %>% 
+  left_join(median_by_animal) %>% 
+  left_join(sum_by_animal) %>% 
+  left_join(median_by_pos) %>% 
+  left_join(sum_by_pos) -> all_phenotypes
+
+all_pheno_mat <-all_phenotypes %>% 
+  column_to_rownames("animal_id") %>% 
+  as.matrix()
+# rankZ normalizing 
+rankz_all_pheno <- apply(all_pheno_mat, 2, rankZ)
+
+```
+
+
+<!-- ```{r data_table} -->
+
+<!-- ovary_counts_pos_wide %>%  -->
+<!--   head() %>%  -->
+<!--   knitr::kable( caption = "First 6 rows of the data which contains counts from two ovaries at five positions each across 133 DO animals. The ovaries are collected from DO animals from various DO generations and the samples were processed at different batches.", -->
+<!--                 format = "html",  -->
+<!--                 table.attr = "style='width:30%;'")  -->
+
+
+<!-- ``` -->
+
+### Principal component analysis doesn't reveal any grouping based on covariates
+
+```{r pca_plot, fig.width=10,fig.height=8, fig.cap="Principal component analysis using both ovary counts from all five positions show that the first principal component captures the majority of variation as seen in the scree plot on the top row. Frist principal component doesn't group the DO animals based on DO generation or batch number for processing as seen in the bottom row figures."}
+
+tibble( var_exp = percentVar,
+        num = seq(1:10)) %>%
+  ggplot()+
+  aes( x = as.factor(num), y = var_exp)+
+  geom_bar( stat = "identity")+
+  theme_pubclean(base_size = 16)+
+  xlab("PC #")+
+  ylab("% Variation explained")-> ova_pca_scree_plot
+
+pca_ova_df %>% 
+  ggplot()+
+  aes(x = PC1,
+      y = PC2,
+      col = generation)+
+  geom_point( size = 3, alpha = 0.7)+
+  theme_pubclean(base_size = 16)+
+  color_palette("Paired")+
+  theme(legend.position = "top")+
+  xlab(paste0("PC1 (",percentVar[1],"%)"))+
+  ylab(paste0("PC2 (",percentVar[2],"%)"))+
+  labs(col="DO Generation")-> ova_pca_plot_gen
+
+pca_ova_df %>% 
+  ggplot()+
+  aes(x = PC1,
+      y = PC2,
+      col = histology_batch)+
+  geom_point( size = 3, alpha = 0.7)+
+  theme_pubclean(base_size = 16)+
+  color_palette("Paired")+
+  theme(legend.position = "top")+
+  xlab(paste0("PC1 (",percentVar[1],"%)"))+
+  ylab(paste0("PC2 (",percentVar[2],"%)"))+
+  labs(col="Batch  ")-> ova_pca_plot_batch
+
+
+ggarrange( ggarrange(NULL, ova_pca_scree_plot, NULL, nrow = 1, widths = c(0.2,0.6,0.2)),  
+          ggarrange(ova_pca_plot_gen,ova_pca_plot_batch, nrow = 1), nrow = 2, heights = c(0.6, 1))
+
+```
+
+### Counts don't show significant differences across positions or ovaries
+
+```{r ovary_count_visual, fig.width=10, fig.height=4, fig.cap = "On the left, box plot comparing the counts from ovariy 1 and 2. On the right, boxplot comparing the counts across the five positions."}
+
+ovary_counts_pos_long %>% 
+  left_join( covar_mat) %>% 
+  ggplot()+
+  aes(y = count,
+      col = ovary,
+      x = ovary)+
+  geom_boxplot( width = 0.1)+
+  ylab("Ovary count")+
+  xlab("Ovary #")+
+  labs(col = "Ovary #")+
+  # stat_compare_means()+ # wilcoxon, p = 0.24
+  theme_pubclean(base_size = 16)+
+  color_palette("npg") -> ova_plot
+
+ovary_counts_pos_long %>% 
+  left_join( covar_mat) %>% 
+  ggplot()+
+  aes(y = count,
+      col = ovary,
+      x = position)+
+  geom_boxplot( width = 0.2)+
+  ylab("Ovary count")+
+  xlab("Slide position")+
+  labs(col = "Ovary #")+
+  #stat_compare_means()+ # kruskall-wallis, all p > 0.5
+  theme_pubclean(base_size = 16)+
+  color_palette("npg") -> ova_pos_plot
+
+ggarrange(ova_plot, ova_pos_plot, common.legend = TRUE, nrow = 1, widths = c(0.3,0.6))
+
+```
+
+### Heritability estimates suggest low genetic contribution to the variation in counts
+
+
+```{r estimate_heritability}
+
+# heritability
+full_shared_kinship <- calc_kinship( genoprobs, type="overall")
+ova_counts_herit <- est_herit(
+  pheno = rankz_all_pheno,
+  kinship = full_shared_kinship,
+  addcovar = covar
+) %>%
+  as_tibble( rownames = "Phenotype") %>% 
+  mutate( value = round(value, 2)) %>% 
+  rename( "Heritability estimate"= "value" )
+
+ova_counts_herit 
+
+```
+
+
+## Genetic mapping identifies loci associated with the variation in counts {.tabset .tabset-fade .tabset-pills}
+
+There are two ovaries counted from 5 locations across a slide from each DO animal. I will use the individual counts ( n = 10), the average per position ( n = 5), the average of counts (n = 1), the first principal component (n=1) and the sum of counts ( n = 1) per animal to do QTL mapping. All phenotypes are rankZ normalized prior to mapping. To determine the significance threshold I am using `scan1perm` function from qtl2 package. 
 
 ```{r qtl_mapping, cache = TRUE}
 
 # mapping for all the phenotypes
-qtl_map <- qtl2::scan1(genoprobs, ovary_counts[, 1:17, drop=FALSE],
-                   kinship_loco, 
-                   addcovar=covar, 
-                   cores=1) 
-
-# get significance thresholding for all 
-
-
+qtl_map <- qtl2::scan1(genoprobs, 
+                       rankz_all_pheno,
+                       kinship_loco, 
+                       addcovar=covar[sample_ids,,drop=FALSE], 
+                       cores=1) 
 ```
 
+```{r qtl_threshold}
 
-```{r qtl_mapping_plot, fig.height=15, fig.width=10}
+## running a stand alone script for this 
+## see at get_perm.R
+## saving objesct for that script here
+# save( genoprobs, rankz_all_pheno, kinship_loco, covar ,file = here("data","perm_objects.RData"))
+
+# loading the perm
+load(here("data/perm_thres.RData"))
+# get 0.05, 0.1 and 0.5 thresholds for each phenotype
+perm_thres_df <- qtl_map_perm_thres %>% 
+  as_tibble() %>% 
+  summarise_all(.funs = list(t_005 = ~ quantile(., 0.95),
+                             t_01 = ~ quantile(., 0.9),
+                             t_05 = ~ quantile(., 0.5))
+                             ) %>% 
+  pivot_longer(cols = everything(), names_to = c("phenotype","threshold"), names_sep = "_t_", values_to = "value")
 
 
-# remember columns 1-10 is the individual ovary counts for 1, 2 for all 5 positions. 
+# use temporary threshold of 6
+qtl_peaks <- find_peaks( qtl_map, map = gmap, threshold = 5)
+qtl_peaks <- qtl_peaks %>% 
+  left_join( ., perm_thres_df, by = c("lodcolumn"="phenotype")) %>% 
+  #filter( lod >= value) %>% 
+  mutate(peak_cM= pos, peak_chr = chr) %>% 
+  interp_bp() 
+#qtl_peaks_wo_covar <- find_peaks( qtl_map_wo_covar, map = gmap, threshold = 6)
+
 qtl_map %>% 
-  as_tibble( rownames = "marker") %>% 
-  left_join(map_dat2) %>% 
-  pivot_longer( cols = 2:18, names_to = c("ovary","slide_position"), names_sep ="_", values_to = "LOD") %>% 
-  filter(
-    ovary != "sum",
-    slide_position !="avg"
-  ) %>% 
-  ggplot()+
-  aes(
-    x = pos_bp_offset,
-    y = LOD
-  )+
-  geom_line(  alpha = .5,
-    aes( col = ovary,
-    group = interaction(ovary, slide_position) )
-  )+
-  facet_wrap(~slide_position, nrow = 5)+
-  theme_pubclean()
+  as_tibble(rownames = "marker") %>% 
+   pivot_longer(2:24, names_to = "phenotype",values_to = "LOD" ) %>% 
+  left_join(map_dat2) -> qtl_map_df
 
-# add chrosomome numbers + squares in the background to identify the chromosomes
-# get peaks from each run and make zoomed in plots with allele effects
-# association mapping for the ones you want to follow up
+```
+
+
+### QTL map of DO ovary counts
+
+```{r qtl_peaks_plot, fig.width=12, fig.height=4, fig.cap="Lineplot showing the genomic location of suggestive QTL peaks for all phenotypes with LOD scores annotated. Genetic mapping is done using generation of DO animals and the date of submission to histology as additive covariates with ovary counts from 133 animals in total."}
+
+
+par(mar=c(5,8,4,1))
+plot_peaks( filter(qtl_peaks, lod >= value), gmap, lod_labels = TRUE, tick_height = 0.5)
+title("Suggestive QTL peaks of all phenotypes, mapped using\n DO generation & histology batches as covariates",cex.main=1.5)
+
+```
+
+### Closer look at QTL on chromosome 1
+
+```{r qtl_chr1_prep, cache = TRUE}
+
+qtl_chr1 <- qtl_peaks %>% 
+  filter(chr == 1, lod >= value) 
+
+# get all allele effects at the QTL peaks
+qtl_chr1_effs <- c()
+haps <- LETTERS[1:8]
+
+
+for( i in 1:nrow(qtl_chr1)){
+  chrom <- qtl_chr1$chr[i]
+  pc <- rankz_all_pheno[,qtl_chr1$lodcolumn[i]]
+
+  scan1 <- scan1(genoprobs = genoprobs,
+                 pheno = pc,
+                 kinship = kinship_loco,
+                 addcovar = covar)
+  effs1 <- scan1blup(genoprobs =genoprobs[,chrom],
+                   pheno = pc,
+                   kinship = kinship_loco[[chrom]],
+                   addcovar = covar)
+
+
+  qtl_chr1_effs[[i]] <- effs1[,haps,drop=FALSE]
+
+}
+
+do.call(rbind, qtl_chr1_effs) %>% 
+  as_tibble() %>% 
+  mutate( phenotype = rep( qtl_chr1$lodcolumn, each = nrow(qtl_chr1_effs[[1]])),
+          marker = rep( rownames(qtl_chr1_effs[[1]]),  nrow(qtl_chr1) )
+                        ) %>% 
+  left_join( map_dat2) -> qtl_chr1_effs_df
+
+```
+
+
+```{r qtl_chr1, fig.width=10, fig.height=8, fig.cap = "QTL on chromosome 1 with allele effects."}
+
+qtl_map_df %>% 
+  filter( phenotype %in% qtl_chr1$lodcolumn,
+          chr == qtl_chr1$chr[1]) %>% 
+  ggplot()+
+  aes( 
+    x = pos_bp/1e06,
+    y = LOD
+    )+
+  geom_line( size = 1)+
+  geom_vline(xintercept =qtl_chr1$interp_bp_peak[1]/1e06, col = "red" , alpha = 0.6)+
+  theme_pubclean(base_size = 16)+
+  facet_wrap(~phenotype, ncol = 3)+
+  #xlim( c( (qtl_chr1$interp_bp_peak[1]/1e06)-15, (qtl_chr1$interp_bp_peak[1]/1e06)+15) )+
+  ylab("LOD score")+
+  xlab("Chromosome 1 (Mbp)") -> chr1_lod_plot
+
+qtl_chr1_effs_df %>% 
+  pivot_longer( all_of(haps), names_to = "haps", values_to = "effect" ) %>% 
+  ggplot()+
+  aes( 
+    x = pos_bp/1e06,
+    y = effect,
+    col = haps
+    )+
+  geom_line( size = 1, alpha = 0.9)+
+  geom_vline(xintercept =qtl_chr1$interp_bp_peak[1]/1e06, col = "red" , alpha = 0.6)+
+  theme_pubclean(base_size = 16)+
+  facet_wrap(~phenotype, ncol = 3)+
+  ylab("Alle effects")+
+  xlab("Chromosome 1 (Mbp)")+
+  #xlim( c( (qtl_chr1$interp_bp_peak[1]/1e06)-15, (qtl_chr1$interp_bp_peak[1]/1e06)+15) )+
+  scale_color_manual( values = founder_colors,
+                        labels = c("A/J","B6","129","NOD","NZO","CAST","PWK","WSB")) -> chr1_eff_plot
+
+ggarrange( chr1_lod_plot, chr1_eff_plot, nrow = 2, heights = c(0.7, 1))
 
 
 ```
 
 
+
+### Closer look at QTL on chromosome 11
+
+```{r qtl_chr11_prep, cache = TRUE}
+
+qtl_chr11 <- qtl_peaks %>% 
+  filter(chr == 11, lod >= value) 
+
+# get all allele effects at the QTL peaks
+qtl_chr11_effs <- c()
+haps <- LETTERS[1:8]
+
+
+for( i in 1:nrow(qtl_chr11)){
+  chrom <- qtl_chr11$chr[i]
+  pc <- rankz_all_pheno[,qtl_chr11$lodcolumn[i]]
+
+  scan1 <- scan1(genoprobs = genoprobs,
+                 pheno = pc,
+                 kinship = kinship_loco,
+                 addcovar = covar)
+  effs1 <- scan1blup(genoprobs =genoprobs[,chrom],
+                   pheno = pc,
+                   kinship = kinship_loco[[chrom]],
+                   addcovar = covar)
+
+
+  qtl_chr11_effs[[i]] <- effs1[,haps,drop=FALSE]
+
+}
+
+do.call(rbind, qtl_chr11_effs) %>% 
+  as_tibble() %>% 
+  mutate( phenotype = rep( qtl_chr11$lodcolumn, each = nrow(qtl_chr11_effs[[1]])),
+          marker = rep( rownames(qtl_chr11_effs[[1]]),  nrow(qtl_chr11) )
+                        ) %>% 
+  left_join( map_dat2) -> qtl_chr11_effs_df
+
+```
+
+
+```{r qtl_chr11, fig.width=15, fig.height=8, fig.cap = "QTL on chromosome 11 with allele effects, zooming to within 10Mb of the QTL peaks."}
+
+qtl_map_df %>% 
+  filter( phenotype %in% qtl_chr11$lodcolumn,
+          chr == qtl_chr11$chr[1]) %>% 
+  ggplot()+
+  aes( 
+    x = pos_bp/1e06,
+    y = LOD
+    )+
+  geom_line( size = 1)+
+  geom_vline(xintercept =qtl_chr11$interp_bp_peak[1]/1e06, col = "red" , alpha = 0.6)+
+  geom_vline(xintercept =qtl_chr11$interp_bp_peak[5]/1e06, col = "red" , alpha = 0.6)+
+  theme_pubclean(base_size = 16)+
+  facet_wrap(~phenotype, nrow =1)+
+  xlim( c( (qtl_chr11$interp_bp_peak[1]/1e06)-10, (qtl_chr11$interp_bp_peak[5]/1e06)+10) )+
+  ylab("LOD score")+
+  xlab("Chromosome 11 (Mbp)") -> chr11_lod_plot
+
+qtl_chr11_effs_df %>% 
+  pivot_longer( all_of(haps), names_to = "haps", values_to = "effect" ) %>% 
+  ggplot()+
+  aes( 
+    x = pos_bp/1e06,
+    y = effect,
+    col = haps
+    )+
+  geom_line( size = 1, alpha = 0.9)+
+  geom_vline(xintercept =qtl_chr11$interp_bp_peak[1]/1e06, col = "red" , alpha = 0.6)+
+  geom_vline(xintercept =qtl_chr11$interp_bp_peak[5]/1e06, col = "red" , alpha = 0.6)+
+  theme_pubclean(base_size = 16)+
+  facet_wrap(~phenotype, nrow = 1)+
+  ylab("Alle effects")+
+  xlab("Chromosome 11 (Mbp)")+
+  xlim( c( (qtl_chr11$interp_bp_peak[1]/1e06)-10, (qtl_chr11$interp_bp_peak[5]/1e06)+10) )+
+  scale_color_manual( values = founder_colors,
+                        labels = c("A/J","B6","129","NOD","NZO","CAST","PWK","WSB")) -> chr11_eff_plot
+
+ggarrange( chr11_lod_plot, chr11_eff_plot, nrow = 2, heights = c(0.7, 1))
+
+
+```
+
+
+### Closer look at QTL on chromosome 17
+
+```{r qtl_chr17_prep, cache = TRUE}
+
+qtl_chr17 <- qtl_peaks %>% 
+   filter(chr == 17, lod >= value) 
+  
+# get all allele effects at the QTL peaks
+qtl_chr17_effs <- c()
+haps <- LETTERS[1:8]
+
+
+for( i in 1:nrow(qtl_chr17)){
+  chrom <- qtl_chr17$chr[i]
+  pc <- rankz_all_pheno[,qtl_chr17$lodcolumn[i]]
+
+  scan1 <- scan1(genoprobs = genoprobs,
+                 pheno = pc,
+                 kinship = kinship_loco,
+                 addcovar = covar)
+  effs1 <- scan1blup(genoprobs =genoprobs[,chrom],
+                   pheno = pc,
+                   kinship = kinship_loco[[chrom]],
+                   addcovar = covar)
+
+
+  qtl_chr17_effs[[i]] <- effs1[,haps,drop=FALSE]
+
+}
+
+do.call(rbind, qtl_chr17_effs) %>% 
+  as_tibble() %>% 
+  mutate( phenotype = rep( qtl_chr17$lodcolumn, each = nrow(qtl_chr17_effs[[1]])),
+          marker = rep( rownames(qtl_chr17_effs[[1]]),  nrow(qtl_chr17) )
+                        ) %>% 
+  left_join( map_dat2) -> qtl_chr17_effs_df
+
+```
+
+
+
+```{r qtl_chr17, fig.width=15, fig.height=9, fig.cap = "QTL on chromosome 17 with allele effects, zooming to the first 30Mb of chromosome 17."}
+
+qtl_map_df %>% 
+  filter( phenotype %in% qtl_chr17$lodcolumn,
+          chr == qtl_chr17$chr[1]) %>% 
+  ggplot()+
+  aes( 
+    x = pos_bp/1e06,
+    y = LOD
+    )+
+  geom_line( size = 1)+
+  geom_vline(xintercept =qtl_chr17$interp_bp_peak[1]/1e06, col = "red" , alpha = 0.6)+
+  theme_pubclean(base_size = 16)+
+  facet_wrap(~phenotype, nrow = 1)+
+  xlim( c( 0, 30 ))+
+  ylab("LOD score")+
+  xlab("Chromosome 17 (Mbp)") -> chr17_lod_plot
+
+qtl_chr17_effs_df %>% 
+  pivot_longer( all_of(haps), names_to = "haps", values_to = "effect" ) %>% 
+  ggplot()+
+  aes( 
+    x = pos_bp/1e06,
+    y = effect,
+    col = haps
+    )+
+  geom_line( size = 1, alpha = 0.9)+
+  geom_vline(xintercept =qtl_chr17$interp_bp_peak[1]/1e06, col = "red" , alpha = 0.6)+
+  theme_pubclean(base_size = 16)+
+  facet_wrap(~phenotype, nrow =1)+
+  ylab("Alle effects")+
+  xlab("Chromosome 17 (Mbp)")+
+  xlim( c( 0, 30 ))+
+  scale_color_manual( values = founder_colors,
+                        labels = c("A/J","B6","129","NOD","NZO","CAST","PWK","WSB")) -> chr17_eff_plot
+
+ggarrange( chr17_lod_plot, chr17_eff_plot, nrow = 2, heights = c(0.7, 1))
+
+
+```
+
+
+
+<!-- ## Association mapping {.tabset .tabset-fade .tabset-pills} -->
+
+<!-- Using the cc variants database to do association mapping within +/- 2.5Mb of the QTL peak. -->
+
+<!-- ```{r load_as_dependencies} -->
+
+<!-- ## adding cc_variants for association mapping -->
+<!-- query_variants <- create_variant_query_func("/projects/munger-lab/projects/DO_qtl_resources/cc_variants.sqlite") -->
+<!-- query_genes <- create_gene_query_func("/projects/munger-lab/projects/DO_qtl_resources/mouse_genes_mgi.sqlite") -->
+
+<!-- ``` -->
+
+<!-- ### QTL on chromosome 11 -->
+
+<!-- ### QTL on chromosome 17 -->
+
+<!-- ```{r shared_assoc_map, fig.height=6, fig.width=20, results='asis', echo=FALSE, eval=TRUE, cache=TRUE} -->
+
+
+
+<!-- for(i in 1:nrow(qtl_peaks)){ -->
+<!--   peak_chr <- qtl_peaks$chr[i] -->
+<!--   phenotype <- qtl_peaks$lodcolumn[i] -->
+<!--   peak_Mbp <- qtl_peaks$interp_bp_peak[i]/1e06 -->
+
+<!--   pmap_Mbp <- lapply( pmap, function(x){x/1e06}) -->
+
+<!--   out_snps <- scan1snps(genoprobs = genoprobs, -->
+<!--                       map = pmap_Mbp, -->
+<!--                       pheno = rankz_all_pheno[,phenotype,drop=FALSE], -->
+<!--                       kinship = kinship_loco[[peak_chr]], -->
+<!--                       addcovar = covar, -->
+<!--                       query_func = query_variants, -->
+<!--                       chr = peak_chr, -->
+<!--                       start = peak_Mbp - 2.5, -->
+<!--                       end = peak_Mbp + 2.5, -->
+<!--                       keep_all_snps = FALSE) -->
+<!--   genes <- query_genes(peak_chr, peak_Mbp - 2.5, peak_Mbp + 2.5) %>%  distinct() -->
+<!--   if(is.null(out_snps)) next -->
+<!--   cat("###", phenotype, "QTL on", peak_chr, " \n") -->
+<!--   par(mar=c(4.1, 4.1,2, 1)) -->
+<!--   plot(out_snps$lod, -->
+<!--      out_snps$snpinfo, -->
+<!--      drop_hilit = 1, -->
+<!--      genes = genes, -->
+<!--      main = paste0(phenotype, " plot")) -->
+<!--   cat(" \n \n") -->
+
+<!-- } -->
+
+<!-- ``` -->
 
 
 
