@@ -8,3 +8,6 @@
 renv
 data
 figures
+qtl_mapping_cache
+qtl_mapping_files
+slurm-12494241.out
