@@ -44,16 +44,40 @@ founder_colors <- c(AJ = "#F0E442", B6 = "#555555", `129` = "#E69F00", NOD = "#0
 ```{r read_data}
 
 ## read in covariates:
+### Ruby shared 3 files: DO_DOB (date of birth), DO_date of collection, DO_Weights 
+dob <- readxl::read_xlsx(here("data","DO_DOB.xlsx"))
+doc <- readxl::read_xlsx(here("data","DO_date of collection.xlsx"))
+weights <- readxl::read_xlsx(here("data","DO_Weights.xlsx"))
+
+### merge covariates
+covar_mat_new <- dob %>% 
+  mutate( DOB = as.factor(DOB)) %>% 
+  full_join( doc %>% 
+               rename( DOC = `Collection date`) %>% 
+               mutate( DOC = as.factor(DOC))
+             ) %>% 
+  full_join( weights %>% 
+               rename( Name = `Name *`) %>% 
+               mutate( Weight = as.double(Weight))
+             ) %>% 
+  mutate( animal_id = gsub("-Q-","_QTL_",Name))
+
+### read in the previous covariate table to add sex, generation, histology
 ### correcting sample names -- to match the phenotype matrix
 covar_mat <- read_csv( here("data","GM_covar_whistology.csv")) %>% 
   mutate( generation = factor(generation)) %>% 
   mutate( animal_id = gsub("-","_",id)) %>% # need to change the - to _ first then remove the _T
   mutate( animal_id = gsub("_T","",animal_id)) # need to change the - to _ first then remove the _T
   
+
+### merge old and new covariates
+covar_mat_extended <- covar_mat_new %>% 
+  full_join( covar_mat)
+
 ### make the covar matrix using generation
-covar<- model.matrix( ~generation+histology_batch, data = covar_mat) 
+covar<- model.matrix( ~generation, data = covar_mat_extended)
 covar <- covar[,-1] #removing intercept column
-rownames(covar) <- covar_mat$animal_id
+rownames(covar) <- covar_mat_extended$animal_id
 
 ## read in genotype probabilities
 probs <- readRDS( here("data","Filas_DO_MURGIGV01_20190131_20200220__GigaMUGA_genoprobs_8state_69k_sorted.rds")) 
@@ -97,9 +121,9 @@ probs_3d_to_qtl2 <- function(genoprobs) {
 }
 genoprobs <- probs_3d_to_qtl2(probs)
 ## subsetting and correcting the sample names -- to match the phenotype matrix
-genoprobs <- genoprobs[ind = covar_mat$id]
-new.ids <- covar_mat$animal_id
-names(new.ids) <- covar_mat$id
+genoprobs <- genoprobs[ind = covar_mat_extended$id]
+new.ids <- covar_mat_extended$animal_id
+names(new.ids) <- covar_mat_extended$id
 genoprobs <- replace_ids(genoprobs, ids = new.ids)
 
 
@@ -116,26 +140,12 @@ map_dat2$pos_bp_offset <- map_dat2$pos_bp+chrom_lens_offset[map_dat2$chr]
 
 
 ## read in phenotype data
-ovary_counts <- read_excel(here("data","Pheno_data.xlsx"), 
-                           skip = 2, # skip first row
+ovary_counts <- readxl::read_xlsx(here("data","DO_Pheno.xlsx"), 
+                                  skip = 1,
                            col_names = c("animal_id",
                                          "ovary1_pos1",
                                          "ovary2_pos1",
-                                         "ovary1_pos2",
-                                         "ovary2_pos2",
-                                         "ovary1_pos3",
-                                         "ovary2_pos3",
-                                         "ovary1_pos4",
-                                         "ovary2_pos4",
-                                         "ovary1_pos5",
-                                         "ovary2_pos5",
-                                         "ovary1_avg",
-                                         "ovary2_avg",
-                                         "sum_pos1",
-                                         "sum_pos2",
-                                         "sum_pos3",
-                                         "sum_pos4",
-                                         "sum_pos5"
+                                         "sum_pos1"
                                          )# override column names
                            ) %>% 
   column_to_rownames("animal_id")
@@ -144,13 +154,9 @@ ovary_counts <- read_excel(here("data","Pheno_data.xlsx"),
 ovary_counts_pos_long <- ovary_counts %>% 
   rownames_to_column("animal_id") %>% 
   select(c("animal_id",
-           "ovary1_pos1","ovary2_pos1",
-           "ovary1_pos2","ovary2_pos2",
-           "ovary1_pos3","ovary2_pos3",
-           "ovary1_pos4","ovary2_pos4",
-           "ovary1_pos5","ovary2_pos5" )
+           "ovary1_pos1","ovary2_pos1")
          ) %>% # remove the sum + average, will remake them
-  pivot_longer(cols = 2:11, 
+  pivot_longer(cols = 2:3, 
                names_to = c("ovary","position"), names_sep = "_", 
                values_to = "count"
   ) %>% 
@@ -166,7 +172,25 @@ ovary_counts_pos_long %>%
                names_glue = "ovary{ovary}_position{position}"
                ) %>% 
   column_to_rownames("animal_id")-> ovary_counts_pos_wide
-#ovary_counts_pos_wide_rankZ <- apply(ovary_counts_pos_wide, 2, rankZ) # rankZ normalized individual values.
+
+### Load in coat color to map as positive control
+coat_color <- readxl::read_xlsx(here("data","DO_coat color.xlsx") ) %>% 
+  mutate( animal_id = gsub("-Q-","_QTL_",Name) ) %>% 
+  select(-Name) %>% 
+  mutate( albino = case_when( `Coat Color` == "black" ~ 0, 
+                            `Coat Color` == "Black" ~ 0, 
+                            `Coat Color` == "Albino" ~ 1,
+                            `Coat Color` == "albino" ~ 1,
+                            `Coat Color` == "Agouti" ~ 0,
+                            `Coat Color` == "agouti" ~ 0),
+          black = case_when( `Coat Color` == "black" ~ 1, 
+                            `Coat Color` == "Black" ~ 1, 
+                            `Coat Color` == "Albino" ~ 0,
+                            `Coat Color` == "albino" ~ 0,
+                            `Coat Color` == "Agouti" ~ 0,
+                            `Coat Color` == "agouti" ~ 0)
+          ) %>% 
+  column_to_rownames("animal_id")
 
 ## subset the data to only include the animals with phenotype
 ### get samples
@@ -178,6 +202,7 @@ kinship_loco <- qtl2::calc_kinship(genoprobs, "loco", cores=1)
 ### subset covar
 covar <- covar[sample_ids,,drop=FALSE]
 
+  
 ## controls for mapping -- check that the sample names are matching across the data sets we are using for mapping.
 # assert_that(are_equal(rownames(genoprobs[[1]]), rownames(ovary_counts_pos_wide_rankZ)))
 # assert_that(are_equal(rownames(genoprobs[[1]]), rownames(covar)))
@@ -188,59 +213,10 @@ This is the overview, processing and QTL mapping analysis of ovary counts obtain
 
 ## Overview of the data {.tabset .tabset-fade .tabset-pills}
 
-```{r prep_pheno}
-
-# Phenotypes: DO ovary counts before PC1 regression
-# get median by pos
-median_by_pos <- ovary_counts_pos_long %>% 
-  group_by(animal_id, position) %>% 
-  summarize( count_med_pos = median(count)) %>% 
-  pivot_wider( names_from = position, names_glue="med_position_{position}", 
-               values_from = count_med_pos)
-
-# get median by animal
-median_by_animal <- ovary_counts_pos_long %>% 
-  group_by(animal_id) %>% 
-  summarize( count_med = median(count))
-
-# get sum by position
-sum_by_pos <- ovary_counts_pos_long %>% 
-  group_by(animal_id, position) %>% 
-  summarize( count_sum_pos = sum(count)) %>% 
-  pivot_wider( names_from = position, names_glue="sum_position_{position}", 
-               values_from = count_sum_pos)
-
-# get sum by animal
-sum_by_animal <- ovary_counts_pos_long %>% 
-  group_by(animal_id) %>% 
-  summarize( count_sum = sum(count))
-
-
-# ovary_counts_pos_wide %>% 
-#   rownames_to_column("animal_id") %>% 
-#   left_join( ., pca_ova_df %>%
-#     select( animal_id, PC1) 
-#     ) %>% 
-#   left_join(median_by_animal) %>% 
-#   left_join(sum_by_animal) %>% 
-#   left_join(median_by_pos) %>% 
-#   left_join(sum_by_pos) -> all_phenotypes
-# 
-# all_pheno_mat <-all_phenotypes %>% 
-#   column_to_rownames("animal_id") %>% 
-#   as.matrix()
-# # rankZ normalizing 
-# rankz_all_pheno <- apply(all_pheno_mat, 2, rankZ)
-
-# Phenotypes: DO ovary counts after PC1 regression
-
-
-
-```
 
 ### Distribution of ovary counts across DO animals. 
 
-```{r ova_dist_plot, fig.width=12, fig.height=6}
+```{r ova_dist_plot, fig.width=8, fig.height=4}
 
 ovary_counts_pos_long %>% 
   mutate( ovary = paste("ovary",ovary),
@@ -250,13 +226,13 @@ ovary_counts_pos_long %>%
   #geom_density()+
   geom_histogram( )+
   theme_pubclean(base_size = 16)+
-  facet_wrap(~ovary+position, nrow = 2, ncol = 5)
+  facet_wrap(~ovary+position)
 
 ```
 
 ### Counts don't show significant differences across positions or ovaries.
 
-```{r ovary_count_visual, fig.width=10, fig.height=4, fig.cap = "On the left, box plot comparing the counts from ovariy 1 and 2. On the right, boxplot comparing the counts across the five positions."}
+```{r ovary_count_visual, fig.width=8, fig.height=4, fig.cap = "On the left, box plot comparing the counts from ovariy 1 and 2. On the right, boxplot comparing the counts across the five positions."}
 
 ovary_counts_pos_long %>% 
   left_join( covar_mat) %>% 
@@ -286,146 +262,252 @@ ovary_counts_pos_long %>%
   theme_pubclean(base_size = 16)+
   color_palette("npg") -> ova_pos_plot
 
-ggarrange(ova_plot, ova_pos_plot, common.legend = TRUE, nrow = 1, widths = c(0.3,0.6))
+ggarrange(ova_plot, ova_pos_plot, common.legend = TRUE, nrow = 1)
 
 ```
 
-### First two principal components (PCs) explain more than 99% of the variation with partial grouping based on technical covariates.
+<!-- ### First two principal components (PCs) explain more than 99% of the variation with partial grouping based on technical covariates. -->
 
-```{r pca_plot, fig.width=10,fig.height=8, fig.cap="On top, scree plot showing the percent variation explained by each principal component. On bottom, scatterplot of PC1 and PC2 values where the samples are colored by technical covariates DO generation and batch corresponding to the date of sample processing by histology."}
+<!-- ```{r pca_plot, fig.width=16,fig.height=12, fig.cap="On top, scree plot showing the percent variation explained by each principal component. On bottom, scatterplot of PC1 and PC2 values where the samples are colored by technical covariates DO generation and batch corresponding to the date of sample processing by histology."} -->
 
-pca_ova <- prcomp( (ovary_counts_pos_wide), center = T, scale. = T)
-percentVar <- round(100 * pca_ova$sdev^2 / sum(pca_ova$sdev^2),2)
-pca_ova_df <- pca_ova$x %>% 
-  as.data.frame() %>% 
-  rownames_to_column("animal_id") %>% 
-  left_join( covar_mat )
+<!-- pca_ova <- prcomp( (ovary_counts_pos_wide), center = T, scale. = T) -->
+<!-- percentVar <- round(100 * pca_ova$sdev^2 / sum(pca_ova$sdev^2),2) -->
+<!-- pca_ova_df <- pca_ova$x %>%  -->
+<!--   as.data.frame() %>%  -->
+<!--   rownames_to_column("animal_id") %>%  -->
+<!--   left_join( covar_mat_extended ) -->
 
-tibble( var_exp = percentVar,
-        num = seq(1:10)) %>%
-  ggplot()+
-  aes( x = as.factor(num), y = var_exp)+
-  geom_bar( stat = "identity")+
-  theme_pubclean(base_size = 16)+
-  xlab("PC #")+
-  ylab("% Variation explained")+
-  ylim(0,100)-> ova_pca_scree_plot
+<!-- tibble( var_exp = percentVar, -->
+<!--         num = seq(1:2)) %>% -->
+<!--   ggplot()+ -->
+<!--   aes( x = as.factor(num), y = var_exp)+ -->
+<!--   geom_bar( stat = "identity")+ -->
+<!--   theme_pubclean(base_size = 16)+ -->
+<!--   xlab("PC #")+ -->
+<!--   ylab("% Variation explained")+ -->
+<!--   ylim(0,100)-> ova_pca_scree_plot -->
 
-pca_ova_df %>% 
-  ggplot()+
-  aes(x = PC1,
-      y = PC2,
-      col = generation)+
-  geom_point( size = 3, alpha = 0.7)+
-  theme_pubclean(base_size = 16)+
-  color_palette("Paired")+
-  theme(legend.position = "top")+
-  xlab(paste0("PC1 (",percentVar[1],"%)"))+
-  ylab(paste0("PC2 (",percentVar[2],"%)"))+
-  labs(col="DO Generation")-> ova_pca_plot_gen
+<!-- pca_ova_df %>%  -->
+<!--   ggplot()+ -->
+<!--   aes(x = PC1, -->
+<!--       y = PC2, -->
+<!--       col = generation)+ -->
+<!--   geom_point( size = 3, alpha = 0.7)+ -->
+<!--   theme_pubclean(base_size = 16)+ -->
+<!--   color_palette("Paired")+ -->
+<!--   theme(legend.position = "top")+ -->
+<!--   xlab(paste0("PC1 (",percentVar[1],"%)"))+ -->
+<!--   ylab(paste0("PC2 (",percentVar[2],"%)"))+ -->
+<!--   labs(col="DO Generation")-> ova_pca_plot_gen -->
 
-pca_ova_df %>% 
-  ggplot()+
-  aes(x = PC1,
-      y = PC2,
-      col = histology_batch)+
-  geom_point( size = 3, alpha = 0.7)+
-  theme_pubclean(base_size = 16)+
-  color_palette("Paired")+
-  theme(legend.position = "top")+
-  xlab(paste0("PC1 (",percentVar[1],"%)"))+
-  ylab(paste0("PC2 (",percentVar[2],"%)"))+
-  labs(col="Batch  ")-> ova_pca_plot_batch
+<!-- pca_ova_df %>%  -->
+<!--   ggplot()+ -->
+<!--   aes(x = PC1, -->
+<!--       y = PC2, -->
+<!--       col = histology_batch)+ -->
+<!--   geom_point( size = 3, alpha = 0.7)+ -->
+<!--   theme_pubclean(base_size = 16)+ -->
+<!--   color_palette("Paired")+ -->
+<!--   theme(legend.position = "top")+ -->
+<!--   xlab(paste0("PC1 (",percentVar[1],"%)"))+ -->
+<!--   ylab(paste0("PC2 (",percentVar[2],"%)"))+ -->
+<!--   labs(col="Batch  ")-> ova_pca_plot_batch -->
 
+<!-- pca_ova_df %>%  -->
+<!--   ggplot()+ -->
+<!--   aes(x = PC1, -->
+<!--       y = PC2, -->
+<!--       col = DOB)+ -->
+<!--   geom_point( size = 3, alpha = 0.7)+ -->
+<!--   theme_pubclean(base_size = 16)+ -->
+<!--   color_palette("Paired")+ -->
+<!--   theme(legend.position = "top")+ -->
+<!--   xlab(paste0("PC1 (",percentVar[1],"%)"))+ -->
+<!--   ylab(paste0("PC2 (",percentVar[2],"%)"))+ -->
+<!--   labs(col="DOB")-> ova_pca_plot_dob -->
 
-ggarrange( ggarrange(NULL, ova_pca_scree_plot, NULL, nrow = 1, widths = c(0.2,0.6,0.2)),  
-          ggarrange(ova_pca_plot_gen,ova_pca_plot_batch, nrow = 1), nrow = 2, heights = c(0.6, 1))
+<!-- pca_ova_df %>%  -->
+<!--   ggplot()+ -->
+<!--   aes(x = PC1, -->
+<!--       y = PC2, -->
+<!--       col = DOC)+ -->
+<!--   geom_point( size = 3, alpha = 0.7)+ -->
+<!--   theme_pubclean(base_size = 16)+ -->
+<!--   color_palette("Paired")+ -->
+<!--   theme(legend.position = "top")+ -->
+<!--   xlab(paste0("PC1 (",percentVar[1],"%)"))+ -->
+<!--   ylab(paste0("PC2 (",percentVar[2],"%)"))+ -->
+<!--   labs(col="Date of Collection")-> ova_pca_plot_doc -->
 
-```
+<!-- pca_ova_df %>%  -->
+<!--   ggplot()+ -->
+<!--   aes(x = PC1, -->
+<!--       y = PC2, -->
+<!--       col = Weight)+ -->
+<!--   geom_point( size = 3, alpha = 0.7)+ -->
+<!--   theme_pubclean(base_size = 16)+ -->
+<!--   scale_color_gradient()+ -->
+<!--   theme(legend.position = "top")+ -->
+<!--   xlab(paste0("PC1 (",percentVar[1],"%)"))+ -->
+<!--   ylab(paste0("PC2 (",percentVar[2],"%)"))+ -->
+<!--   labs(col="Animal Weight")-> ova_pca_plot_w -->
 
+<!-- ggarrange(ova_pca_scree_plot, ova_pca_plot_gen,ova_pca_plot_batch,  -->
+<!--           ova_pca_plot_dob, ova_pca_plot_doc, ova_pca_plot_w, nrow = 3, ncol = 2) -->
 
-### Regressing out PC1 and PC2 to remove variation introduced by technical covariates. 
-
-```{r regress_pc1}
-
-
-ova_pc1_reg <- apply( ovary_counts_pos_wide, 2, function(y){
-                                                lm_obj=lm(y~pca_ova_df$PC1+pca_ova_df$PC2);
-                                                lm_obj$residuals}
-  )
-
-# check how residuals look
-# apply( ovary_counts_pos_wide, 2, function(y){
-#                                                 lm_obj=lm(y~pca_ova_df$PC1);
-#                                                 hist(lm_obj$residuals)}
-#   )
-
-
-```
-
-
-```{r new_pca_plot, fig.width=10,fig.height=8, fig.cap="On top, scree plot showing the percent variation explained by each principal component. On bottom, scatterplot of PC1 and PC2 values where the samples are colored by technical covariates DO generation and batch corresponding to the date of sample processing by histology."}
-
-pca_ova_pc1_reg <- prcomp(ova_pc1_reg)
-var_exp <- round(100 * pca_ova_pc1_reg$sdev^2 / sum(pca_ova_pc1_reg$sdev^2),2)
-pca_ova_pc1_reg_df <- pca_ova_pc1_reg$x %>% 
-  as.data.frame() %>% 
-  rownames_to_column("animal_id") %>% 
-  left_join( covar_mat )
-
-tibble( var_exp = var_exp,
-        num = seq(1:10)) %>%
-  ggplot()+
-  aes( x = as.factor(num), y = var_exp)+
-  geom_bar( stat = "identity")+
-  theme_pubclean(base_size = 16)+
-  xlab("PC #")+
-  ylab("% Variation explained")+
-  ylim(0,100)-> ova_pca_scree_plot_pc1_reg
-
-pca_ova_pc1_reg_df %>% 
-  ggplot()+
-  aes(x = PC1,
-      y = PC2,
-      col = generation)+
-  geom_point( size = 3, alpha = 0.7)+
-  theme_pubclean(base_size = 16)+
-  color_palette("Paired")+
-  theme(legend.position = "top")+
-  xlab(paste0("PC1 (",var_exp[1],"%)"))+
-  ylab(paste0("PC2 (",var_exp[2],"%)"))+
-  labs(col="DO Generation")-> ova_pca_plot_gen_pc1_reg
-
-pca_ova_pc1_reg_df %>% 
-  ggplot()+
-  aes(x = PC1,
-      y = PC2,
-      col = histology_batch)+
-  geom_point( size = 3, alpha = 0.7)+
-  theme_pubclean(base_size = 16)+
-  color_palette("Paired")+
-  theme(legend.position = "top")+
-  xlab(paste0("PC1 (",var_exp[1],"%)"))+
-  ylab(paste0("PC2 (",var_exp[2],"%)"))+
-  labs(col="Batch  ")-> ova_pca_plot_batch_pc1_reg
+<!-- ``` -->
 
 
-ggarrange( ggarrange(NULL, ova_pca_scree_plot_pc1_reg, NULL, nrow = 1, widths = c(0.2,0.6,0.2)),  
-          ggarrange(ova_pca_plot_gen_pc1_reg,ova_pca_plot_batch_pc1_reg, nrow = 1), nrow = 2, heights = c(0.6, 1))
+<!-- ### Regressing out PC1 to remove variation introduced by technical covariates.  -->
+
+<!-- ```{r regress_pc1} -->
+
+
+<!-- ova_pc1_reg <- apply( ovary_counts_pos_wide, 2, function(y){ -->
+<!--                                                 lm_obj=lm(y~pca_ova_df$PC1); -->
+<!--                                                 lm_obj$residuals} -->
+<!--   ) -->
+
+<!-- # check how residuals look -->
+<!-- # apply( ovary_counts_pos_wide, 2, function(y){ -->
+<!-- #                                                 lm_obj=lm(y~pca_ova_df$PC1); -->
+<!-- #                                                 hist(lm_obj$residuals)} -->
+<!-- #   ) -->
+
+
+<!-- ``` -->
+
+
+<!-- ```{r new_pca_plot, fig.width=10,fig.height=8, fig.cap="On top, scree plot showing the percent variation explained by each principal component. On bottom, scatterplot of PC1 and PC2 values where the samples are colored by technical covariates DO generation and batch corresponding to the date of sample processing by histology."} -->
+
+<!-- pca_ova_pc1_reg <- prcomp(ova_pc1_reg) -->
+<!-- var_exp <- round(100 * pca_ova_pc1_reg$sdev^2 / sum(pca_ova_pc1_reg$sdev^2),2) -->
+<!-- pca_ova_pc1_reg_df <- pca_ova_pc1_reg$x %>%  -->
+<!--   as.data.frame() %>%  -->
+<!--   rownames_to_column("animal_id") %>%  -->
+<!--   left_join( covar_mat ) -->
+
+<!-- tibble( var_exp = var_exp, -->
+<!--         num = seq(1:10)) %>% -->
+<!--   ggplot()+ -->
+<!--   aes( x = as.factor(num), y = var_exp)+ -->
+<!--   geom_bar( stat = "identity")+ -->
+<!--   theme_pubclean(base_size = 16)+ -->
+<!--   xlab("PC #")+ -->
+<!--   ylab("% Variation explained")+ -->
+<!--   ylim(0,100)-> ova_pca_scree_plot_pc1_reg -->
+
+<!-- pca_ova_pc1_reg_df %>%  -->
+<!--   ggplot()+ -->
+<!--   aes(x = PC1, -->
+<!--       y = PC2, -->
+<!--       col = generation)+ -->
+<!--   geom_point( size = 3, alpha = 0.7)+ -->
+<!--   theme_pubclean(base_size = 16)+ -->
+<!--   color_palette("Paired")+ -->
+<!--   theme(legend.position = "top")+ -->
+<!--   xlab(paste0("PC1 (",var_exp[1],"%)"))+ -->
+<!--   ylab(paste0("PC2 (",var_exp[2],"%)"))+ -->
+<!--   labs(col="DO Generation")-> ova_pca_plot_gen_pc1_reg -->
+
+<!-- pca_ova_pc1_reg_df %>%  -->
+<!--   ggplot()+ -->
+<!--   aes(x = PC1, -->
+<!--       y = PC2, -->
+<!--       col = histology_batch)+ -->
+<!--   geom_point( size = 3, alpha = 0.7)+ -->
+<!--   theme_pubclean(base_size = 16)+ -->
+<!--   color_palette("Paired")+ -->
+<!--   theme(legend.position = "top")+ -->
+<!--   xlab(paste0("PC1 (",var_exp[1],"%)"))+ -->
+<!--   ylab(paste0("PC2 (",var_exp[2],"%)"))+ -->
+<!--   labs(col="Batch  ")-> ova_pca_plot_batch_pc1_reg -->
+
+
+<!-- ggarrange( ggarrange(NULL, ova_pca_scree_plot_pc1_reg, NULL, nrow = 1, widths = c(0.2,0.6,0.2)),   -->
+<!--           ggarrange(ova_pca_plot_gen_pc1_reg,ova_pca_plot_batch_pc1_reg, nrow = 1), nrow = 2, heights = c(0.6, 1)) -->
 
 
 
-```
+<!-- ``` -->
 
+## Genetic mapping with coat color as a quality control {.tabset .tabset-fade .tabset-pills}
 
-### Heritability estimates for some positions are very small suggesting low genetic contribution or the prescence of unresoled technical variation.
+### Heritability estimates.
 
 ```{r estimate_heritability}
 
 # heritability
 full_shared_kinship <- calc_kinship( genoprobs, type="overall")
+
+coat_color_herit <- est_herit(
+  pheno = coat_color[ rownames(full_shared_kinship),c("albino","black"),drop=F],
+  kinship = full_shared_kinship,
+  addcovar = covar
+) %>%
+  as_tibble( rownames = "Phenotype") %>% 
+  mutate( value = round(value, 2)) %>% 
+  rename( "Heritability estimate"= "value" )
+
+coat_color_herit
+
+```
+### QTL map
+
+```{r qtl_mapping_coat_col, cache = TRUE}
+
+# mapping for all the phenotypes
+coat_col_scan <- qtl2::scan1(genoprobs, 
+                       coat_color[ ,c("albino","black"),drop=F],
+                       kinship_loco, 
+                       addcovar= covar[sample_ids,,drop=FALSE], 
+                       cores=1) 
+
+qtl_eff_b <-scan1blup(genoprobs =genoprobs[,"2"],
+                   pheno = coat_color[,"black",drop=F],
+                   kinship = kinship_loco[["2"]],
+                   addcovar = covar[sample_ids,,drop=FALSE]) 
+
+qtl_eff_a <- scan1blup(genoprobs =genoprobs[,"7"],
+                   pheno = coat_color[ ,"albino",drop=F],
+                   kinship = kinship_loco[["7"]],
+                   addcovar = covar[sample_ids,,drop=FALSE]) 
+
+find_peaks(coat_col_scan,pmap, threshold = 10)
+
+```
+
+Albino coat QTL scan:
+
+```{r albino_plot, fig.width=8, fig.height=6}
+
+plot_coefCC( qtl_eff_a, scan1_output = coat_col_scan[,"albino",drop=F], pmap, main="Albino", legend = "topleft")
+
+```
+
+
+Black coat QTL scan:
+
+```{r albino_plot, fig.width=8, fig.height=6}
+
+plot_coefCC( qtl_eff_b, scan1_output = coat_col_scan[,"black",drop=F], pmap, main="Black", legend= "topleft")
+
+```
+
+
+## Genetic mapping identifies loci associated with the variation in counts {.tabset .tabset-fade .tabset-pills}
+
+
+### Heritability estimates
+
+```{r est_herit_ova}
+
+# use rankZ normalized values for all three
+
+ovary_counts_rankZ <- apply(ovary_counts, 2, rankZ)
+
 ova_counts_herit <- est_herit(
-  pheno = ova_pc1_reg,
+  pheno = ovary_counts_rankZ,
   kinship = full_shared_kinship,
   #addcovar = covar
 ) %>%
@@ -433,40 +515,25 @@ ova_counts_herit <- est_herit(
   mutate( value = round(value, 2)) %>% 
   rename( "Heritability estimate"= "value" )
 
-ova_counts_herit %>% 
-  DT::datatable(.,
-     extensions = 'Buttons',
-                rownames = FALSE, 
-                filter="top",
-                options = list(dom = 'Blfrtip',
-                               buttons = c('copy', 'csv', 'excel'),
-                               pageLength = 10, 
-                               scrollX= TRUE
-                               ))
+ova_counts_herit
 
 ```
-
-
-## Genetic mapping identifies loci associated with the variation in counts {.tabset .tabset-fade .tabset-pills}
-
-There are two ovaries counted from 5 locations across a slide from each DO animal. I will use the individual counts ( n = 10), the average per position ( n = 5), the average of counts (n = 1), the first principal component (n=1) and the sum of counts ( n = 1) per animal to do QTL mapping. All phenotypes are rankZ normalized prior to mapping. To determine the significance threshold I am using `scan1perm` function from qtl2 package. 
-
 
 
 ```{r qtl_mapping, cache = TRUE}
 
-
 # mapping for all the phenotypes
-qtl_map <- qtl2::scan1(genoprobs, 
-                       ova_pc1_reg,
+ova_counts_qtl_scan <- qtl2::scan1(genoprobs, 
+                       ovary_counts_rankZ,
                        kinship_loco, 
-                       addcovar=covar[sample_ids,,drop=FALSE], 
+                       addcovar= covar[sample_ids,,drop=FALSE], 
                        cores=1) 
 
 # use temporary threshold of 6
-qtl_peaks <- find_peaks( qtl_map, map = gmap, threshold = 5)
+qtl_peaks <- find_peaks( ova_counts_qtl_scan, map = gmap, threshold = 5)
 
 ```
+
 
 ```{r qtl_threshold, eval = FALSE}
 
@@ -502,26 +569,14 @@ qtl_map %>%
 ```
 
 
-<!-- ### QTL map of DO ovary counts using unprocessed data -->
-
-<!-- ```{r qtl_peaks_plot, fig.width=12, fig.height=4, fig.cap="Lineplot showing the genomic location of suggestive QTL peaks for all phenotypes with LOD scores annotated. Genetic mapping is done using generation of DO animals and the date of submission to histology as additive covariates with ovary counts from 133 animals in total."} -->
+### QTL map of rankZ normalized DO ovary counts
 
 
-<!-- par(mar=c(5,8,4,1)) -->
-<!-- plot_peaks( filter(qtl_peaks, lod >= value), gmap, lod_labels = TRUE, tick_height = 0.5) -->
-<!-- title("Suggestive QTL peaks of all phenotypes, mapped using\n DO generation & histology batches as covariates",cex.main=1.5) -->
-
-<!-- ``` -->
-
-
-### QTL map of DO ovary counts using processed data (PC1+PC2 regressed out)
-
-
-```{r qtl_peaks_plot, fig.width=12, fig.height=6, fig.cap="Lineplot showing the genomic location of suggestive QTL peaks for all phenotypes with LOD scores annotated. Genetic mapping is done using generation of DO animals and the date of submission to histology as additive covariates with ovary counts from 133 animals in total."}
+```{r qtl_peaks_plot, fig.width=12, fig.height=6, fig.cap="Lineplot showing the genomic location of suggestive QTL peaks for all phenotypes with LOD scores annotated. Genetic mapping is done using generation of DO animals as an additive covariate with ovary counts from 174 animals in total."}
 
 par(mar=c(5,8,4,1))
 plot_peaks( filter(qtl_peaks, lod >= 6), gmap, lod_labels = TRUE, tick_height = 0.5)
-title("Suggestive QTL peaks of all phenotypes, mapped using\n DO generation & histology batches as covariates",cex.main=1.5)
+title("Suggestive QTL peaks of all phenotypes, mapped using\n DO generation as a covariate",cex.main=1.5)
 
 ```
 
@@ -566,7 +621,7 @@ qtl_peaks %>%
 
 for( i in 1:nrow(qtl_peaks_lod6)){
   chrom <- qtl_peaks_lod6$chr[i]
-  pc <- ova_pc1_reg[,qtl_peaks_lod6$lodcolumn[i]]
+  pc <- ovary_counts_rankZ[,qtl_peaks_lod6$lodcolumn[i]]
   this_markers <- c(qtl_peaks_lod6$before[i], qtl_peaks_lod6$after[i])
 
   scan1 <- scan1(genoprobs = genoprobs,
