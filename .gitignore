@@ -11,3 +11,5 @@ figures
 qtl_mapping_cache
 qtl_mapping_files
 slurm-12494241.out
+slurm-14971186.out
+cc_variants.sqlite

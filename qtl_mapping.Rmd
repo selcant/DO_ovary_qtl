@@ -230,9 +230,9 @@ ovary_counts_pos_long %>%
 
 ```
 
-### Counts don't show significant differences across positions or ovaries.
+### Counts don't show significant differences across two ovaries.
 
-```{r ovary_count_visual, fig.width=8, fig.height=4, fig.cap = "On the left, box plot comparing the counts from ovariy 1 and 2. On the right, boxplot comparing the counts across the five positions."}
+```{r ovary_count_visual, fig.width=4, fig.height=4, fig.cap = "Box plot comparing the counts from ovariy 1 and 2."}
 
 ovary_counts_pos_long %>% 
   left_join( covar_mat) %>% 
@@ -244,27 +244,71 @@ ovary_counts_pos_long %>%
   ylab("Ovary count")+
   xlab("Ovary #")+
   labs(col = "Ovary #")+
-  # stat_compare_means()+ # wilcoxon, p = 0.24
+  stat_compare_means()+ # wilcoxon, p = 0.5
   theme_pubclean(base_size = 16)+
-  color_palette("npg") -> ova_plot
+  color_palette("npg")-> ova_plot
 
-ovary_counts_pos_long %>% 
-  left_join( covar_mat) %>% 
-  ggplot()+
-  aes(y = count,
-      col = ovary,
-      x = position)+
-  geom_boxplot( width = 0.2)+
-  ylab("Ovary count")+
-  xlab("Slide position")+
-  labs(col = "Ovary #")+
-  #stat_compare_means()+ # kruskall-wallis, all p > 0.5
-  theme_pubclean(base_size = 16)+
-  color_palette("npg") -> ova_pos_plot
+# ovary_counts_pos_long %>% 
+#   left_join( covar_mat) %>% 
+#   ggplot()+
+#   aes(y = count,
+#       col = ovary,
+#       x = position)+
+#   geom_boxplot( width = 0.2)+
+#   ylab("Ovary count")+
+#   xlab("Slide position")+
+#   labs(col = "Ovary #")+
+#   #stat_compare_means()+ # kruskall-wallis, all p > 0.5
+#   theme_pubclean(base_size = 16)+
+#   color_palette("npg") -> ova_pos_plot
 
-ggarrange(ova_plot, ova_pos_plot, common.legend = TRUE, nrow = 1)
+ggarrange(ova_plot, common.legend = TRUE, nrow = 1)
 
 ```
+
+### Ovary counts do not show clear bias across technical covariates. 
+
+```{r cor_plots, fig.width=8, fig.height=10}
+
+ovary_counts_pos_long %>% 
+  left_join(covar_mat_extended) %>% 
+  ggplot()+
+  aes( x = count,
+       y = Weight)+
+  geom_point()+
+  facet_wrap(~ovary+position)+
+  theme_pubclean(base_size = 16)+
+  stat_smooth(method = "lm")  +
+  xlab("Ovary counts")+
+  ylab("Animal weight")-> weight_plot
+
+ovary_counts_pos_long %>% 
+  left_join(covar_mat_extended) %>% 
+  ggplot()+
+  aes( x = count,
+       y = DOB)+
+  geom_point()+
+  facet_wrap(~ovary+position)+
+  theme_pubclean(base_size = 16) +
+  xlab("Ovary counts")+
+  ylab("Date of birth")-> dob_plot
+
+
+ovary_counts_pos_long %>% 
+  left_join(covar_mat_extended) %>% 
+  ggplot()+
+  aes( x = count,
+       y = DOC)+
+  geom_point()+
+  facet_wrap(~ovary+position)+
+  theme_pubclean(base_size = 16)  +
+  xlab("Ovary counts")+
+  ylab("Date of collection")-> doc_plot
+
+
+ggarrange( ggarrange(NULL,weight_plot, nrow =1, widths = c(0.15,1)), dob_plot, doc_plot, nrow = 3)
+```
+
 
 <!-- ### First two principal components (PCs) explain more than 99% of the variation with partial grouping based on technical covariates. -->
 
@@ -431,7 +475,7 @@ ggarrange(ova_plot, ova_pos_plot, common.legend = TRUE, nrow = 1)
 
 <!-- ``` -->
 
-## Genetic mapping with coat color as a quality control {.tabset .tabset-fade .tabset-pills}
+## Genetic mapping with coat color as a control identifies known loci associated with albino and black coat color with high LOD scores, suggesting we have reasonable mapping power in the data. {.tabset .tabset-fade .tabset-pills}
 
 ### Heritability estimates.
 
@@ -488,14 +532,14 @@ plot_coefCC( qtl_eff_a, scan1_output = coat_col_scan[,"albino",drop=F], pmap, ma
 
 Black coat QTL scan:
 
-```{r albino_plot, fig.width=8, fig.height=6}
+```{r black_plot, fig.width=8, fig.height=6}
 
 plot_coefCC( qtl_eff_b, scan1_output = coat_col_scan[,"black",drop=F], pmap, main="Black", legend= "topleft")
 
 ```
 
 
-## Genetic mapping identifies loci associated with the variation in counts {.tabset .tabset-fade .tabset-pills}
+## Ovary counts are heritable and we identify a significant (alpha = 0.1) QTL on chromosome 17. {.tabset .tabset-fade .tabset-pills}
 
 
 ### Heritability estimates
@@ -532,18 +576,21 @@ ova_counts_qtl_scan <- qtl2::scan1(genoprobs,
 # use temporary threshold of 6
 qtl_peaks <- find_peaks( ova_counts_qtl_scan, map = gmap, threshold = 5)
 
+
+
 ```
 
 
-```{r qtl_threshold, eval = FALSE}
+```{r qtl_threshold, eval = T}
 
 ## running a stand alone script for this 
 ## see at get_perm.R
 ## saving objesct for that script here
 # save( genoprobs, rankz_all_pheno, kinship_loco, covar ,file = here("data","perm_objects.RData"))
+# save(genoprobs, ovary_counts_rankZ, kinship_loco,covar, file = here("data", "perm_objects_v2.RData")) 
 
 # loading the perm
-load(here("data/perm_thres.RData"))
+load(here("data/perm_thres_v2.RData"))
 # get 0.05, 0.1 and 0.5 thresholds for each phenotype
 perm_thres_df <- qtl_map_perm_thres %>%
   as_tibble() %>%
@@ -561,10 +608,20 @@ qtl_peaks <- qtl_peaks %>%
   interp_bp() 
 #qtl_peaks_wo_covar <- find_peaks( qtl_map_wo_covar, map = gmap, threshold = 6)
 
-qtl_map %>% 
-  as_tibble(rownames = "marker") %>% 
-   pivot_longer(2:24, names_to = "phenotype",values_to = "LOD" ) %>% 
-  left_join(map_dat2) -> qtl_map_df
+# Get the bounding markers for each QTL peak
+# i.e. markers on the 69k grid that are up- and downstream of the peak
+query <- qtl_peaks %>% 
+  dplyr::select(peak_chr, interp_bp_peak) %>%
+  dplyr::rename(chrom=peak_chr, start=interp_bp_peak) %>% 
+  mutate(end=start) %>%
+  GenomicRanges::GRanges()
+subject <- select(map_dat2, chrom, pos_bp) %>% 
+  dplyr::rename(start=pos_bp) %>%
+  mutate(end=start) %>% 
+  GenomicRanges::GRanges()   # length 69,005
+
+qtl_peaks$before <- map_dat2$marker[GenomicRanges::follow(query, subject)]
+qtl_peaks$after <- map_dat2$marker[GenomicRanges::precede(query, subject)]
 
 ```
 
@@ -572,11 +629,11 @@ qtl_map %>%
 ### QTL map of rankZ normalized DO ovary counts
 
 
-```{r qtl_peaks_plot, fig.width=12, fig.height=6, fig.cap="Lineplot showing the genomic location of suggestive QTL peaks for all phenotypes with LOD scores annotated. Genetic mapping is done using generation of DO animals as an additive covariate with ovary counts from 174 animals in total."}
+```{r qtl_peaks_plot, fig.width=12, fig.height=6, fig.cap="Lineplot showing the genomic location of significant and suggestive QTL peaks for all phenotypes with LOD scores annotated. Genetic mapping is done using generation of DO animals as an additive covariate with ovary counts from 174 animals in total."}
 
 par(mar=c(5,8,4,1))
-plot_peaks( filter(qtl_peaks, lod >= 6), gmap, lod_labels = TRUE, tick_height = 0.5)
-title("Suggestive QTL peaks of all phenotypes, mapped using\n DO generation as a covariate",cex.main=1.5)
+plot_peaks( filter(qtl_peaks), gmap, lod_labels = TRUE, tick_height = 0.5)
+title("QTL peaks of all phenotypes, mapped using\n DO generation as a covariate",cex.main=1.5)
 
 ```
 
@@ -584,14 +641,13 @@ title("Suggestive QTL peaks of all phenotypes, mapped using\n DO generation as a
 ```{r}
 
 qtl_peaks %>% 
-  filter( lod > 6) %>% 
-  rename( peak_chr = chr,
-          peak_cM = pos) %>% 
-  interp_bp(.) %>% 
+  mutate(threshold = as.numeric(threshold)/10) %>% 
   rename( Phenotype = lodcolumn, 
           `Peak (bp)` = interp_bp_peak,
           `Peak (cM)` = peak_cM,
-          `LOD score` = lod
+          `LOD score` = lod,
+          `Significance alpha` =threshold,
+          `Significance LOD` = value
           ) %>% 
   mutate_if( is.numeric, round, 2) %>% 
   select( -lodindex) %>% 
@@ -617,7 +673,7 @@ all_df_effs <- c()
 haps <- LETTERS[1:8]
 
 qtl_peaks %>% 
-  filter( lod > 6) -> qtl_peaks_lod6
+  filter(  !(lodcolumn =="ovary1_pos1" & threshold == "05" )) -> qtl_peaks_lod6
 
 for( i in 1:nrow(qtl_peaks_lod6)){
   chrom <- qtl_peaks_lod6$chr[i]
@@ -642,6 +698,193 @@ for( i in 1:nrow(qtl_peaks_lod6)){
 }
 
 ```
+
+## Follow up on QTL on chromosome 17 {.tabset .tabset-fade .tabset-pills}
+
+### Closer look at the QTL
+
+```{r qtl_zoom_plot, fig.height=4, fig.width=10}
+
+# conf_int_chr1 <- bayes_int( scan1_output = ova_counts_qtl_scan, map = pmap, lodcolumn ="ovary2_pos1", threshold = 6, chr = 1) %>%  as_tibble()
+conf_int_chr17 <- bayes_int( scan1_output = ova_counts_qtl_scan, map = pmap, lodcolumn ="ovary1_pos1", threshold = 6, chr = 17) %>% as_tibble()
+
+# ova_counts_qtl_scan %>% 
+#   as_tibble( rownames = "marker") %>% 
+#   select( marker, lod = sum_pos1) %>% 
+#   left_join(map_dat2) %>% 
+#   filter( chrom %in% c(1)) %>% 
+#   ggplot()+
+#     aes( 
+#       x= pos_bp/1e06,
+#       y = lod
+#       )+
+#     geom_line( size = 1)+
+#     theme_pubclean( base_size = 18)+
+#     facet_wrap(~chrom)+
+#   xlab("Chr 1 (Mb)")+
+#   ylab("LOD")+
+#   xlim( conf_int_chr1$ci_lo/1e06, conf_int_chr1$ci_hi/1e06)+
+#   geom_vline( xintercept = conf_int_chr1$pos/1e06, col = "dark red", linetype = 2, size = 1) -> chr1_plot
+
+
+ova_counts_qtl_scan %>% 
+  as_tibble( rownames = "marker") %>% 
+  select( marker, lod = ovary1_pos1) %>% 
+  left_join(map_dat2) %>% 
+  filter( chrom %in% c(17)) %>% 
+  ggplot()+
+    aes( 
+      x= pos_bp/1e06,
+      y = lod
+      )+
+    geom_line( size = 1)+
+    theme_pubclean( base_size = 18)+
+    #facet_wrap(~chrom)
+  xlab("Chr 17 (Mb)")+
+  ylab("LOD")+
+  xlim( conf_int_chr17$ci_lo/1e06, 20+conf_int_chr17$pos/1e06)+
+  geom_vline( xintercept = conf_int_chr17$pos/1e06, col = "dark red", linetype = 2, size = 1) -> chr17_plot
+
+chr17_eff_plot <- all_df_effs[[2]] %>%
+  as_tibble(rownames = "effect") %>% 
+  mutate( pheno = "sum_pos1") %>%
+  mutate( effect = case_when( effect == "A" ~ "AJ",
+                              effect == "B" ~ "B6",
+                              effect == "C" ~ "129",
+                              effect == "D" ~ "NOD",
+                              effect == "E" ~ "NZO",
+                              effect == "F" ~ "CAST",
+                              effect == "G" ~ "PWK",
+                              effect == "H" ~ "WSB")) %>% 
+  ggplot()+
+  aes( x = effect,
+       y = value,
+       group = pheno
+       )+
+  geom_point(size = 4, show.legend = F)+
+  geom_line(show.legend = T, size =1.2)+
+  theme_pubclean(base_size = 18)+
+  ylab("Haplotype effects")+
+  xlab("")+
+  ylim(-1,1)+
+  geom_hline( yintercept = 0)+
+  theme(axis.line.x = element_blank(),
+        axis.title = element_text(size = 18))+
+  coord_flip( clip ="off")+
+  theme(legend.position = "none")
+  
+  
+ggarrange(  chr17_plot,chr17_eff_plot, widths = c(0.8,0.4) ,nrow =1)
+
+```
+
+
+### Genes under the QTL peak
+
+List of genes that are within the +/- 5Mb of the QTL peak.
+
+```{r gene_list}
+
+# v102 genes, the last ensembl version with the old genome assembly
+all_genes <- read_tsv( here( "data", "mouse_genes_v102.txt"), 
+                       col_names = c("ensembl_gene_id", 
+                                     "gene_start", "gene_end","strand",
+                                     "gene_biotype","mgi_symbol", "gene_chr"),
+                       skip = 1)
+
+all_genes %>% 
+  mutate( gene_midpoint = (gene_start+gene_end)/2) %>% 
+  filter( 
+    # (gene_chr == 1 & between( gene_midpoint, conf_int_chr1$pos-5e06, conf_int_chr1$pos+5e06) ) |
+            (gene_chr == 17 & between( gene_midpoint, conf_int_chr17$pos-5e06, conf_int_chr17$pos+5e06) )
+  ) %>% 
+  mutate( qtl_peak = case_when( 
+    #gene_chr ==1 ~conf_int_chr1$pos,
+                                         gene_chr ==17~conf_int_chr17$pos)
+          ) %>% 
+  mutate( distance = abs(gene_midpoint - qtl_peak)) %>% 
+  select(ensembl_gene_id, mgi_symbol, gene_chr, gene_midpoint, distance_to_qtl = distance, gene_biotype) %>% 
+  arrange(gene_chr, (distance_to_qtl)) %>% 
+   DT::datatable(.,
+     extensions = 'Buttons',
+                rownames = FALSE, 
+                filter="top",
+                options = list(dom = 'Blfrtip',
+                               buttons = c('copy', 'csv', 'excel'),
+                               pageLength = 10, 
+                               scrollX= TRUE
+                               ))
+
+```
+
+### Association mapping doesn't higlight any clear candidate SNPs.
+
+
+```{r as_mapping}
+
+## adding cc_variants for association mapping
+query_variants <- create_variant_query_func(here("data/cc_variants.sqlite"))
+query_genes <- create_gene_query_func("data/mouse_genes_mgi.sqlite")
+pmap_Mbp <- lapply( pmap, function(x){x/1e06})
+attributes(genoprobs)$is_x_chr <- NULL
+
+# out_snps_chr1 <- scan1snps(genoprobs = genoprobs, 
+#                            map = pmap_Mbp, 
+#                            pheno = ovary_counts_rankZ[,"sum_pos1",drop=F], 
+#                            kinship = kinship_loco[["1"]], 
+#                            addcovar = covar, 
+#                            query_func= query_variants,
+#                            chr= 1, 
+#                            start = (conf_int_chr1$pos/1e06)-2.5, 
+#                            end = (conf_int_chr1$pos/1e06)+2.5, 
+#                            keep_all_snps = F)
+out_snps_chr17 <- scan1snps(genoprobs = genoprobs, 
+                           map = pmap_Mbp, 
+                           pheno = ovary_counts_rankZ[,"sum_pos1",drop=F], 
+                           kinship = kinship_loco[["17"]], 
+                           addcovar = covar, 
+                           query_func= query_variants,
+                           chr= 17, 
+                           start = (conf_int_chr17$pos/1e06)-2.5, 
+                           end = (conf_int_chr17$pos/1e06)+2.5, 
+                           keep_all_snps = F)
+
+
+```
+
+
+```{r as_mapping_plot_chr1, fig.height=8, fig.width=10, eval = F}
+
+genes_chr1 <- query_genes(chr = 1,
+                          start = (conf_int_chr1$pos/1e06)-2.5, 
+                          end = (conf_int_chr1$pos/1e06)+2.5)
+par(mar=c(4.1, 4.1, 0.6, 0.6))
+plot(out_snps_chr1$lod, out_snps_chr1$snpinfo, drop_hilit=1.5, genes=genes_chr1)
+
+```
+
+
+```{r as_mapping_plot_chr17, fig.height=10, fig.width=14}
+
+genes_chr17 <- query_genes(chr = 17,
+                          start = (conf_int_chr17$pos/1e06)-2.5, 
+                          end = (conf_int_chr17$pos/1e06)+2.5)
+par(mar=c(4.1, 4.1, 0.6, 0.6))
+plot(out_snps_chr17$lod, out_snps_chr17$snpinfo, drop_hilit=1.5, genes=genes_chr17)
+
+```
+
+
+## Looking at the ovary counts of animals with different Complement 5 (Hc) alleles
+
+Chr2:34873343-34951450 bp, - strand -- find the closest markers, look how Dan did it with Lifr and try to follow that.
+
+
+
+
+
+
+
 
 
 

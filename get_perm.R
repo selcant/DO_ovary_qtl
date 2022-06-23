@@ -9,16 +9,16 @@ library(qtl2)
 
 
 # load prepped data
-load("/projects/munger-lab/projects/DO_ovary_QTL/data/perm_objects.RData")
+load("/projects/munger-lab/projects/DO_ovary_QTL/data/perm_objects_v2.RData")
 
 # get significance thresholding for all
 # # permutations:
 qtl_map_perm_thres <- scan1perm(
   genoprobs = genoprobs,
-  pheno =   rankz_all_pheno,
+  pheno =   ovary_counts_rankZ,
   kinship = kinship_loco,
   addcovar = covar,
   n_perm = 1000, 
   cores = 16
 )
-save( qtl_map_perm_thres, file = "/projects/munger-lab/projects/DO_ovary_QTL/data/perm_thres.RData")
+save( qtl_map_perm_thres, file = "/projects/munger-lab/projects/DO_ovary_QTL/data/perm_thres_v2.RData")
